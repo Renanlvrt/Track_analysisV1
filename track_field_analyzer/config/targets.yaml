@@ -1,0 +1,139 @@
+# Target Angle Ranges for Sprint Analysis (60m - 200m Events)
+# Based on common sprint coaching literature and biomechanics research
+# 
+# DISCLAIMER: These ranges are typical coaching targets. Individual optimal 
+# ranges vary based on body proportions, flexibility, and personal mechanics.
+# These are NOT medical recommendations. Consult a qualified coach for 
+# personalized guidance.
+
+events:
+  - 60m
+  - 100m
+  - 200m
+
+phases:
+  set_position:
+    description: "Athlete in blocks, 'Set' command position"
+    targets:
+      front_knee_angle:
+        min: 90
+        max: 110
+        optimal: 100
+        unit: degrees
+        feedback_low: "Front knee too closed - may limit power output"
+        feedback_high: "Front knee too open - check block spacing"
+      
+      rear_knee_angle:
+        min: 120
+        max: 140
+        optimal: 130
+        unit: degrees
+        feedback_low: "Rear knee too closed - may delay drive"
+        feedback_high: "Rear knee too extended - blocks may be too far apart"
+      
+      hip_angle:
+        min: 25
+        max: 45
+        optimal: 35
+        unit: degrees
+        feedback_low: "Hips too low - may need to raise slightly"
+        feedback_high: "Hips too high - may cause early rising"
+      
+      trunk_lean:
+        min: 40
+        max: 55
+        optimal: 45
+        unit: degrees
+        feedback_low: "Not enough forward lean - shoulders should be over hands"
+        feedback_high: "Excessive forward lean - may lose balance at start"
+      
+      shoulder_position:
+        description: "Shoulders should be slightly ahead of hands"
+        
+  drive_phase:
+    description: "First 10-30m, aggressive forward push"
+    targets:
+      trunk_lean:
+        min: 30
+        max: 50
+        optimal: 40
+        unit: degrees
+        feedback_low: "Rising too early - stay low and push"
+        feedback_high: "Good low drive angle"
+      
+      front_knee_drive:
+        min: 70
+        max: 100
+        optimal: 85
+        unit: degrees
+        feedback_low: "Knee drive too compact"
+        feedback_high: "Knee driving well forward"
+      
+      arm_angle:
+        min: 80
+        max: 100
+        optimal: 90
+        unit: degrees
+        feedback_low: "Arms too tight - relax elbows"
+        feedback_high: "Arms too loose - keep elbows at ~90°"
+
+  acceleration:
+    description: "Transition from drive to upright running (20-40m)"
+    targets:
+      trunk_lean:
+        min: 15
+        max: 35
+        optimal: 25
+        unit: degrees
+        feedback_low: "Transitioning to upright - good progression"
+        feedback_high: "Still in low drive position - start rising gradually"
+      
+      hip_height:
+        description: "Hips should be rising toward running height"
+
+  max_velocity:
+    description: "Upright sprinting form (40m+)"
+    targets:
+      trunk_lean:
+        min: 0
+        max: 15
+        optimal: 5
+        unit: degrees
+        feedback_low: "Near vertical - good upright posture"
+        feedback_high: "Still leaning forward - should be more upright"
+      
+      knee_lift:
+        min: 80
+        max: 110
+        optimal: 95
+        unit: degrees
+        feedback_low: "Knee lift could be higher for stride length"
+        feedback_high: "Good knee drive"
+      
+      arm_angle:
+        min: 85
+        max: 95
+        optimal: 90
+        unit: degrees
+
+# Phase detection thresholds (for heuristic classification)
+phase_detection:
+  set_position:
+    max_hip_height_normalized: 0.55  # Hip y-coordinate (0=top, 1=bottom)
+    min_trunk_lean: 40
+  
+  drive_phase:
+    min_hip_height_normalized: 0.45
+    max_hip_height_normalized: 0.65
+    min_trunk_lean: 25
+    max_trunk_lean: 50
+  
+  acceleration:
+    min_hip_height_normalized: 0.35
+    max_hip_height_normalized: 0.55
+    min_trunk_lean: 10
+    max_trunk_lean: 35
+  
+  max_velocity:
+    max_hip_height_normalized: 0.45
+    max_trunk_lean: 20
