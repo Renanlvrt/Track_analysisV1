@@ -30,9 +30,10 @@ class TestDetectSprintPhase:
     
     def test_drive_phase_detection(self):
         """Test drive phase is detected with medium hips and forward lean."""
+        # Hip at 0.53 (below SET threshold of 0.55) but with good lean
         phase = detect_sprint_phase(
             trunk_lean=40.0,
-            hip_height_normalized=0.55,
+            hip_height_normalized=0.53,  # Below SET threshold
             knee_angle_front=None,
         )
         
@@ -50,9 +51,10 @@ class TestDetectSprintPhase:
     
     def test_max_velocity_detection(self):
         """Test max velocity phase with upright posture."""
+        # Hip at 0.30 (below ACCELERATION min of 0.35) and low lean
         phase = detect_sprint_phase(
             trunk_lean=10.0,
-            hip_height_normalized=0.35,  # High in frame
+            hip_height_normalized=0.30,  # Below ACCELERATION threshold
             knee_angle_front=None,
         )
         

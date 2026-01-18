@@ -1,0 +1,20 @@
+[theme]
+# Premium Sports Dashboard Color Palette
+primaryColor = "#00d4ff"           # Neon cyan - highlights, good states
+backgroundColor = "#0a0a14"        # Deep navy - main background  
+secondaryBackgroundColor = "#12121f" # Slightly lighter - cards, containers
+textColor = "#e8e8e8"              # Off-white - primary text
+font = "sans serif"
+
+# Additional semantic colors used in custom CSS:
+# Accent 2 (Optimal): #22c55e (neon green)
+# Warning: #f59e0b (amber/orange)  
+# Error: #ef4444 (bright red)
+# Muted text: #a0a0a0 (gray)
+
+[server]
+headless = true
+enableCORS = false
+
+[browser]
+gatherUsageStats = false
