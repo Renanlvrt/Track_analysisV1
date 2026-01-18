@@ -1,37 +1,26 @@
 """
-Track & Field Form Analyzer - Streamlit Application
+Sprint Form Analyzer - Premium Sports Dashboard
+A best-in-class biomechanics analysis tool for sprinters (60m-200m).
 
-A computer vision tool for analyzing sprint form using pose estimation.
-Supports 60m-200m sprint events with focus on block starts, drive phase,
-and acceleration mechanics.
-
-Inspired by the Ochy app design - modern, single-page analysis view.
-
-Usage:
-    streamlit run app.py
+Design inspired by Ochy app - clean, actionable, trustworthy.
 """
 
 from __future__ import annotations
-
-import tempfile
+import math
 from pathlib import Path
 from typing import Any
 
-import cv2
 import numpy as np
 import pandas as pd
 import streamlit as st
 
-# Import our modules
 from src.io.video import (
     load_video_from_uploaded_file,
-    load_image_from_uploaded_file,
     get_video_properties,
     sample_frames,
     cleanup_temp_file,
 )
-from src.pose.mediapipe_pose import PoseEstimator, PoseResult
-from src.analysis.angles import extract_joint_angles, get_hip_height_normalized
+from src.pose.mediapipe_pose import PoseEstimator
 from src.analysis.metrics import (
     compute_frame_metrics,
     aggregate_metrics,
@@ -41,762 +30,961 @@ from src.analysis.metrics import (
 from src.analysis.phases import SprintPhase, get_phase_description
 from src.viz.overlay import annotate_frame
 
-
-# Page configuration
+# =============================================================================
+# PAGE CONFIG
+# =============================================================================
 st.set_page_config(
-    page_title="Track & Field Form Analyzer",
+    page_title="Sprint Form Analyzer",
     page_icon="🏃",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
-# Modern Dark Theme CSS (Ochy-inspired)
+# =============================================================================
+# CUSTOM CSS - Premium Sports Dashboard Theme
+# =============================================================================
 st.markdown("""
 <style>
-    /* Dark theme background */
-    .stApp {
-        background: linear-gradient(180deg, #1a1a2e 0%, #16213e 50%, #0f0f23 100%);
-    }
-    
-    /* Main container */
-    .main .block-container {
-        padding: 1rem 2rem;
-        max-width: 1400px;
-    }
-    
-    /* Header styling */
-    .app-header {
-        text-align: center;
-        padding: 1rem 0;
-        margin-bottom: 1rem;
-    }
-    
-    .app-title {
-        font-size: 2rem;
-        font-weight: 700;
-        background: linear-gradient(90deg, #00d4ff, #7c3aed);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        margin: 0;
-    }
-    
-    .app-subtitle {
-        color: #8b8b9a;
-        font-size: 0.9rem;
-        margin-top: 0.25rem;
-    }
-    
-    /* Video container */
-    .video-container {
-        background: #1e1e32;
-        border-radius: 16px;
-        padding: 1rem;
-        margin-bottom: 1rem;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.3);
-    }
-    
-    /* Score card styling */
-    .score-card {
-        background: linear-gradient(135deg, #1e1e32 0%, #2a2a42 100%);
-        border-radius: 16px;
-        padding: 1.25rem;
-        margin: 0.5rem 0;
-        border: 1px solid rgba(255,255,255,0.1);
-        box-shadow: 0 4px 15px rgba(0,0,0,0.2);
-    }
-    
-    .score-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 0.5rem;
-    }
-    
-    .score-label {
-        color: #8b8b9a;
-        font-size: 0.85rem;
-        font-weight: 500;
-    }
-    
-    .score-value {
-        font-size: 2rem;
-        font-weight: 700;
-        color: #fff;
-    }
-    
-    .score-value.good { color: #22c55e; }
-    .score-value.okay { color: #eab308; }
-    .score-value.poor { color: #ef4444; }
-    
-    /* Status badge */
-    .badge {
-        display: inline-block;
-        padding: 0.25rem 0.75rem;
-        border-radius: 20px;
-        font-size: 0.75rem;
-        font-weight: 600;
-        text-transform: uppercase;
-    }
-    
-    .badge-good {
-        background: rgba(34, 197, 94, 0.2);
-        color: #22c55e;
-        border: 1px solid #22c55e;
-    }
-    
-    .badge-okay {
-        background: rgba(234, 179, 8, 0.2);
-        color: #eab308;
-        border: 1px solid #eab308;
-    }
-    
-    .badge-poor {
-        background: rgba(239, 68, 68, 0.2);
-        color: #ef4444;
-        border: 1px solid #ef4444;
-    }
-    
-    /* Metric detail */
-    .metric-detail {
-        color: #a0a0b0;
-        font-size: 0.9rem;
-        margin-top: 0.5rem;
-        line-height: 1.4;
-    }
-    
-    /* Total score card */
-    .total-score-card {
-        background: linear-gradient(135deg, #2a2a42 0%, #1e1e32 100%);
-        border-radius: 20px;
-        padding: 1.5rem;
-        text-align: center;
-        border: 2px solid rgba(124, 58, 237, 0.3);
-        box-shadow: 0 8px 30px rgba(124, 58, 237, 0.15);
-    }
-    
-    .total-score-label {
-        color: #8b8b9a;
-        font-size: 1rem;
-        margin-bottom: 0.5rem;
-    }
-    
-    .total-score-value {
-        font-size: 3.5rem;
-        font-weight: 800;
-        background: linear-gradient(90deg, #00d4ff, #7c3aed);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-    }
-    
-    /* Phase indicator */
-    .phase-indicator {
-        background: linear-gradient(135deg, #1e1e32 0%, #2a2a42 100%);
-        border-radius: 12px;
-        padding: 1rem;
-        text-align: center;
-        border: 1px solid rgba(255,255,255,0.1);
-    }
-    
-    .phase-name {
-        font-size: 1.25rem;
-        font-weight: 600;
-        color: #fff;
-    }
-    
-    .phase-description {
-        color: #8b8b9a;
-        font-size: 0.85rem;
-        margin-top: 0.5rem;
-    }
-    
-    /* Tab styling */
-    .stTabs [data-baseweb="tab-list"] {
-        background: transparent;
-        gap: 0.5rem;
-    }
-    
-    .stTabs [data-baseweb="tab"] {
-        background: rgba(255,255,255,0.05);
-        border-radius: 8px;
-        padding: 0.5rem 1rem;
-        color: #8b8b9a;
-    }
-    
-    .stTabs [aria-selected="true"] {
-        background: linear-gradient(90deg, #7c3aed, #00d4ff);
-        color: #fff !important;
-    }
-    
-    /* Slider styling */
-    .stSlider [data-baseweb="slider"] {
-        padding: 0.5rem 0;
-    }
-    
-    /* Navigation buttons */
-    .nav-button {
-        background: rgba(255,255,255,0.1);
-        border: 1px solid rgba(255,255,255,0.2);
-        border-radius: 8px;
-        color: #fff;
-        padding: 0.5rem 1rem;
-        cursor: pointer;
-        transition: all 0.2s;
-    }
-    
-    .nav-button:hover {
-        background: rgba(255,255,255,0.2);
-    }
-    
-    /* Timeline */
-    .timeline-container {
-        background: rgba(0,0,0,0.3);
-        border-radius: 8px;
-        padding: 0.75rem 1rem;
-        margin-top: 0.5rem;
-    }
-    
-    /* Feedback section */
-    .feedback-section {
-        background: linear-gradient(135deg, #1e1e32 0%, #2a2a42 100%);
-        border-radius: 16px;
-        padding: 1.25rem;
-        border: 1px solid rgba(255,255,255,0.1);
-    }
-    
-    .feedback-title {
-        color: #fff;
-        font-size: 1.1rem;
-        font-weight: 600;
-        margin-bottom: 1rem;
-    }
-    
-    .feedback-item {
-        background: rgba(234, 179, 8, 0.1);
-        border-left: 3px solid #eab308;
-        padding: 0.75rem 1rem;
-        margin: 0.5rem 0;
-        border-radius: 0 8px 8px 0;
-        color: #e0e0e0;
-    }
-    
-    .feedback-item.good {
-        background: rgba(34, 197, 94, 0.1);
-        border-left-color: #22c55e;
-    }
-    
-    /* Hide Streamlit elements */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    .stDeployButton {display: none;}
-    
-    /* Progress bar */
-    .stProgress > div > div {
-        background: linear-gradient(90deg, #7c3aed, #00d4ff);
-    }
+/* =========================== */
+/* PREMIUM SPORTS THEME        */
+/* =========================== */
+
+/* Hide default elements */
+#MainMenu, footer, .stDeployButton {display: none;}
+
+/* Typography */
+h1, h2, h3 {font-weight: 600 !important;}
+
+/* Hero Score Card */
+.hero-score {
+    background: linear-gradient(135deg, #1a1a2e 0%, #0d0d1a 100%);
+    border: 2px solid #00d4ff;
+    border-radius: 20px;
+    padding: 2rem;
+    text-align: center;
+    box-shadow: 0 0 30px rgba(0, 212, 255, 0.15);
+}
+
+.hero-score-value {
+    font-size: 4rem;
+    font-weight: 800;
+    background: linear-gradient(90deg, #00d4ff, #22c55e);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    line-height: 1;
+}
+
+.hero-score-label {
+    color: #a0a0a0;
+    font-size: 0.9rem;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    margin-bottom: 0.5rem;
+}
+
+.hero-summary {
+    color: #e8e8e8;
+    font-size: 1rem;
+    margin-top: 1rem;
+    line-height: 1.5;
+}
+
+/* Metric Cards */
+.metric-card {
+    background: linear-gradient(135deg, #12121f 0%, #1a1a2e 100%);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 16px;
+    padding: 1.25rem;
+    margin-bottom: 1rem;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+}
+
+.metric-label {
+    color: #a0a0a0;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 0.25rem;
+}
+
+.metric-value {
+    font-size: 2rem;
+    font-weight: 700;
+    color: #e8e8e8;
+    margin-right: 0.5rem;
+}
+
+.metric-unit {
+    color: #a0a0a0;
+    font-size: 1rem;
+}
+
+/* Status Badges */
+.badge {
+    display: inline-block;
+    padding: 0.25rem 0.75rem;
+    border-radius: 20px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.badge-good {
+    background: rgba(34, 197, 94, 0.2);
+    color: #22c55e;
+    border: 1px solid rgba(34, 197, 94, 0.4);
+}
+
+.badge-okay {
+    background: rgba(245, 158, 11, 0.2);
+    color: #f59e0b;
+    border: 1px solid rgba(245, 158, 11, 0.4);
+}
+
+.badge-poor {
+    background: rgba(239, 68, 68, 0.2);
+    color: #ef4444;
+    border: 1px solid rgba(239, 68, 68, 0.4);
+}
+
+/* Context Bar (target range) */
+.context-bar {
+    height: 8px;
+    background: linear-gradient(90deg, 
+        #ef4444 0%, 
+        #f59e0b 20%, 
+        #22c55e 40%, 
+        #22c55e 60%, 
+        #f59e0b 80%, 
+        #ef4444 100%);
+    border-radius: 4px;
+    margin: 0.75rem 0;
+    position: relative;
+}
+
+.context-marker {
+    position: absolute;
+    width: 4px;
+    height: 16px;
+    background: #fff;
+    border-radius: 2px;
+    top: -4px;
+    transform: translateX(-50%);
+    box-shadow: 0 0 10px rgba(255,255,255,0.5);
+}
+
+/* Coaching Cue */
+.coaching-cue {
+    color: #a0a0a0;
+    font-size: 0.85rem;
+    line-height: 1.4;
+    margin-top: 0.5rem;
+    padding-left: 0.5rem;
+    border-left: 2px solid #00d4ff;
+}
+
+/* Focus Area Cards */
+.focus-card {
+    background: linear-gradient(135deg, #12121f 0%, #1a1a2e 100%);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 16px;
+    padding: 1.25rem;
+    height: 100%;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+}
+
+.focus-icon {
+    font-size: 2rem;
+    margin-bottom: 0.5rem;
+}
+
+.focus-title {
+    color: #e8e8e8;
+    font-size: 1rem;
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+}
+
+.focus-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    margin-bottom: 0.5rem;
+}
+
+.focus-cue {
+    color: #a0a0a0;
+    font-size: 0.85rem;
+    line-height: 1.4;
+}
+
+/* Phase Badge */
+.phase-badge {
+    display: inline-block;
+    padding: 0.5rem 1rem;
+    border-radius: 25px;
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+
+/* Video Container */
+.video-container {
+    background: #0a0a14;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid rgba(255,255,255,0.1);
+}
+
+/* Info Box */
+.info-box {
+    background: rgba(0, 212, 255, 0.1);
+    border: 1px solid rgba(0, 212, 255, 0.3);
+    border-radius: 12px;
+    padding: 1rem;
+    color: #e8e8e8;
+}
+
+.warning-box {
+    background: rgba(245, 158, 11, 0.1);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+    border-radius: 12px;
+    padding: 1rem;
+    color: #e8e8e8;
+}
+
+/* Sidebar styling */
+.sidebar-header {
+    color: #00d4ff;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 0.5rem;
+    margin-top: 1rem;
+}
+
+/* Empty state */
+.empty-state {
+    text-align: center;
+    padding: 3rem;
+    color: #a0a0a0;
+}
+
+.empty-state h3 {
+    color: #e8e8e8;
+    margin-bottom: 1rem;
+}
 </style>
 """, unsafe_allow_html=True)
 
 
-def init_session_state() -> None:
-    """Initialize session state variables."""
-    if "processed_frames" not in st.session_state:
-        st.session_state.processed_frames = []
-    if "frame_metrics" not in st.session_state:
-        st.session_state.frame_metrics = []
-    if "current_frame_idx" not in st.session_state:
-        st.session_state.current_frame_idx = 0
-    if "video_properties" not in st.session_state:
-        st.session_state.video_properties = None
-    if "processing_complete" not in st.session_state:
-        st.session_state.processing_complete = False
-    if "aggregated_metrics" not in st.session_state:
-        st.session_state.aggregated_metrics = None
+# =============================================================================
+# SESSION STATE
+# =============================================================================
+def init_session_state():
+    defaults = {
+        "processed_frames": [],
+        "frame_metrics": [],
+        "current_frame_idx": 0,
+        "processing_complete": False,
+        "aggregated_metrics": None,
+        "video_properties": None,
+        # User profile
+        "user_event": "100m",
+        "user_level": "Intermediate",
+    }
+    for key, val in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = val
 
 
-def calculate_form_score(metrics: FrameMetrics | None, aggregated: dict | None) -> tuple[int, str]:
-    """Calculate overall form score based on metrics."""
-    if metrics is None and aggregated is None:
-        return 0, "poor"
-    
-    score = 50  # Base score
-    
-    if metrics:
-        # Adjust based on phase detection
-        if metrics.phase == SprintPhase.SET:
-            trunk_lean = abs(metrics.angles.get("trunk_lean", 0))
-            if 40 <= trunk_lean <= 55:
-                score += 20
-            elif 30 <= trunk_lean <= 60:
-                score += 10
-            
-            # Knee angles
-            left_knee = metrics.angles.get("left_knee", 0)
-            right_knee = metrics.angles.get("right_knee", 0)
-            front_knee = min(left_knee or 180, right_knee or 180)
-            if 90 <= front_knee <= 110:
-                score += 15
-            elif 80 <= front_knee <= 120:
-                score += 8
-        
-        elif metrics.phase in [SprintPhase.DRIVE, SprintPhase.ACCELERATION]:
-            trunk_lean = abs(metrics.angles.get("trunk_lean", 0))
-            if metrics.phase == SprintPhase.DRIVE:
-                if 30 <= trunk_lean <= 50:
-                    score += 25
-                elif 20 <= trunk_lean <= 55:
-                    score += 15
-            else:
-                if 15 <= trunk_lean <= 35:
-                    score += 25
-                elif 10 <= trunk_lean <= 40:
-                    score += 15
-        
-        elif metrics.phase == SprintPhase.MAX_VELOCITY:
-            trunk_lean = abs(metrics.angles.get("trunk_lean", 0))
-            if trunk_lean <= 15:
-                score += 25
-            elif trunk_lean <= 25:
-                score += 15
-        
-        # Penalize for unknown phase
-        if metrics.phase == SprintPhase.UNKNOWN:
-            score -= 15
-    
-    # Clamp score
-    score = max(0, min(100, score))
-    
-    # Determine rating
-    if score >= 75:
-        rating = "good"
-    elif score >= 50:
-        rating = "okay"
-    else:
-        rating = "poor"
-    
-    return score, rating
-
-
-def get_metric_score(value: float | None, target_min: float, target_max: float, optimal: float) -> tuple[int, str]:
-    """Calculate score for a specific metric."""
+# =============================================================================
+# HELPER FUNCTIONS
+# =============================================================================
+def get_rating(value: float, optimal: float, good_range: float = 10, okay_range: float = 20) -> tuple[str, str]:
+    """Get rating based on distance from optimal."""
     if value is None or pd.isna(value):
-        return 0, "poor"
+        return "poor", "—"
     
-    value = abs(value)  # Use absolute for angles like trunk lean
+    diff = abs(value - optimal)
+    if diff <= good_range:
+        return "good", "✓ Good"
+    elif diff <= okay_range:
+        return "okay", "⚠ Okay"
+    else:
+        return "poor", "✗ Needs Work"
+
+
+def calculate_form_score(metrics: FrameMetrics | None) -> tuple[float, str, str]:
+    """Calculate overall form score (0-10)."""
+    if metrics is None:
+        return 0, "poor", "No pose detected"
     
-    if target_min <= value <= target_max:
-        # Within range - calculate how close to optimal
-        if value == optimal:
-            score = 100
-        else:
-            range_size = target_max - target_min
-            distance_from_optimal = abs(value - optimal)
-            score = max(60, 100 - int((distance_from_optimal / range_size) * 40))
+    score = 5.0  # Base
+    notes = []
+    
+    angles = metrics.angles
+    trunk = abs(angles.get("trunk_lean", 0) or 0)
+    
+    # Phase-appropriate scoring
+    if metrics.phase == SprintPhase.SET:
+        if 40 <= trunk <= 55:
+            score += 2
+            notes.append("good forward lean")
+        elif 30 <= trunk <= 60:
+            score += 1
+    elif metrics.phase == SprintPhase.DRIVE:
+        if 30 <= trunk <= 50:
+            score += 2.5
+            notes.append("strong drive angle")
+        elif 20 <= trunk <= 55:
+            score += 1.5
+    elif metrics.phase == SprintPhase.ACCELERATION:
+        if 15 <= trunk <= 35:
+            score += 2
+        elif 10 <= trunk <= 40:
+            score += 1
+    elif metrics.phase == SprintPhase.MAX_VELOCITY:
+        if trunk <= 15:
+            score += 2.5
+            notes.append("good upright posture")
+        elif trunk <= 25:
+            score += 1.5
+    
+    # Knee drive bonus
+    left_knee = angles.get("left_knee")
+    right_knee = angles.get("right_knee")
+    if left_knee and right_knee:
+        front_knee = min(left_knee, right_knee)
+        if 90 <= front_knee <= 120:
+            score += 1
+    
+    # Unknown phase penalty
+    if metrics.phase == SprintPhase.UNKNOWN:
+        score -= 1
+    
+    score = max(0, min(10, score))
+    
+    if score >= 7:
         rating = "good"
-    elif target_min - 10 <= value <= target_max + 10:
-        # Close to range
-        score = 50
+    elif score >= 5:
         rating = "okay"
     else:
-        # Outside range
-        score = 30
         rating = "poor"
     
-    return score, rating
+    summary = ", ".join(notes) if notes else "Keep working on form"
+    return score, rating, summary
 
 
-def render_score_card(label: str, value: float | None, unit: str, score: int, rating: str, detail: str = "") -> None:
-    """Render a metric score card."""
-    badge_class = f"badge-{rating}"
-    value_class = rating
+def get_coaching_cue(metric_name: str, value: float, phase: SprintPhase) -> str:
+    """Get actionable coaching cue for a metric."""
+    cues = {
+        "trunk_lean": {
+            "low": "Lean more forward from your ankles, not your waist",
+            "high": "You're rising too quickly—stay low longer",
+            "good": "Great forward lean angle!"
+        },
+        "knee_drive": {
+            "low": "Drive your knee higher toward your chest",
+            "high": "Good knee drive, focus on quick ground contact",
+            "good": "Excellent knee drive!"
+        },
+        "arm_action": {
+            "low": "Keep elbows at ~90°, drive arms more aggressively",
+            "high": "Relax your arms slightly, maintain 90° bend",
+            "good": "Good arm mechanics!"
+        }
+    }
     
-    value_display = f"{value:.0f}" if value and not pd.isna(value) else "—"
+    if value is None or pd.isna(value):
+        return "Unable to measure—check video quality"
+    
+    # Determine if value is low, high, or good
+    if metric_name == "trunk_lean":
+        value = abs(value)
+        if phase in [SprintPhase.SET, SprintPhase.DRIVE]:
+            if value < 35:
+                return cues["trunk_lean"]["low"]
+            elif value > 55:
+                return cues["trunk_lean"]["high"]
+            return cues["trunk_lean"]["good"]
+        else:
+            if value > 25:
+                return "Transition to more upright posture"
+            return cues["trunk_lean"]["good"]
+    
+    return "Keep practicing this movement pattern"
+
+
+# =============================================================================
+# SIDEBAR
+# =============================================================================
+def render_sidebar() -> dict:
+    with st.sidebar:
+        st.markdown("## ⚙️ Settings")
+        
+        # Analysis mode
+        st.markdown('<div class="sidebar-header">Analysis Mode</div>', unsafe_allow_html=True)
+        mode = st.radio(
+            "Speed vs Accuracy",
+            ["⚡ Fast (10 frames)", "⚖️ Balanced (30 frames)", "🎯 Accurate (100 frames)"],
+            index=1,
+            label_visibility="collapsed"
+        )
+        
+        mode_map = {"⚡ Fast (10 frames)": 10, "⚖️ Balanced (30 frames)": 30, "🎯 Accurate (100 frames)": 100}
+        max_frames = mode_map[mode]
+        sample_rate = 10 if max_frames == 10 else 5 if max_frames == 30 else 2
+        
+        # Display options
+        st.markdown('<div class="sidebar-header">Display</div>', unsafe_allow_html=True)
+        video_width = st.slider("Video Width %", 50, 80, 65, help="Adjust video size")
+        show_skeleton = st.checkbox("Show skeleton", value=True)
+        show_angles_on_video = st.checkbox("Show angles on video", value=False, 
+            help="Display angle values directly on the video (can be cluttered)")
+        
+        # Model settings
+        with st.expander("🔧 Advanced"):
+            model_complexity = st.selectbox("Model Quality", [0, 1, 2], index=1,
+                format_func=lambda x: ["Lite", "Full", "Heavy"][x])
+            confidence = st.slider("Confidence Threshold", 0.3, 0.9, 0.5)
+        
+        st.markdown("---")
+        
+        # Profile
+        st.markdown('<div class="sidebar-header">Your Profile</div>', unsafe_allow_html=True)
+        st.session_state.user_event = st.selectbox("Event", ["60m", "100m", "200m"], index=1)
+        st.session_state.user_level = st.selectbox("Level", 
+            ["Beginner", "Intermediate", "Advanced", "Elite"], index=1)
+        
+        st.markdown("---")
+        
+        # Help
+        with st.expander("❓ Filming Tips"):
+            st.markdown("""
+            **For best results:**
+            - Film from the side (perpendicular)
+            - Keep camera stable (tripod recommended)
+            - Ensure full body is visible
+            - 5-10 seconds is enough
+            - Good lighting helps accuracy
+            """)
+        
+        # Limitations
+        with st.expander("⚠️ Limitations"):
+            st.markdown("""
+            **This tool provides training feedback only.**
+            
+            - Accuracy depends on video quality
+            - 2D analysis has depth limitations
+            - Camera angle affects measurements
+            - Not a substitute for a coach
+            
+            *Backed by MediaPipe pose estimation*
+            """)
+    
+    return {
+        "max_frames": max_frames,
+        "sample_rate": sample_rate,
+        "video_width": video_width,
+        "show_skeleton": show_skeleton,
+        "show_angles": show_angles_on_video,
+        "model_complexity": model_complexity if 'model_complexity' in dir() else 1,
+        "confidence": confidence if 'confidence' in dir() else 0.5,
+    }
+
+
+# =============================================================================
+# METRIC CARD COMPONENT
+# =============================================================================
+def render_metric_card(label: str, value: float | None, unit: str, 
+                       optimal: float, target_min: float, target_max: float,
+                       coaching_cue: str, icon: str = "📐"):
+    """Render a premium metric card with context bar."""
+    
+    if value is None or pd.isna(value):
+        value_display = "—"
+        rating, badge_text = "poor", "No Data"
+        marker_pos = 50
+    else:
+        value_display = f"{abs(value):.0f}"
+        rating, badge_text = get_rating(abs(value), optimal, 
+            good_range=(target_max - target_min) / 3,
+            okay_range=(target_max - target_min) / 2)
+        # Calculate marker position (0-100%)
+        range_size = target_max - target_min
+        marker_pos = max(0, min(100, ((abs(value) - target_min + range_size * 0.3) / (range_size * 1.6)) * 100))
     
     st.markdown(f"""
-    <div class="score-card">
-        <div class="score-header">
-            <span class="score-label">{label}</span>
-            <span class="badge {badge_class}">{rating.title()}</span>
+    <div class="metric-card">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+            <div>
+                <div class="metric-label">{icon} {label}</div>
+                <div style="display: flex; align-items: baseline;">
+                    <span class="metric-value">{value_display}</span>
+                    <span class="metric-unit">{unit}</span>
+                </div>
+            </div>
+            <span class="badge badge-{rating}">{badge_text}</span>
         </div>
-        <div style="display: flex; justify-content: space-between; align-items: center;">
-            <span class="score-value {value_class}">{score}%</span>
-            <span style="color: #fff; font-size: 1.5rem; font-weight: 600;">{value_display}{unit}</span>
+        <div class="context-bar">
+            <div class="context-marker" style="left: {marker_pos}%;"></div>
         </div>
-        {f'<div class="metric-detail">{detail}</div>' if detail else ''}
+        <div style="display: flex; justify-content: space-between; color: #666; font-size: 0.7rem;">
+            <span>{target_min}{unit}</span>
+            <span>Target: {target_min}–{target_max}{unit}</span>
+            <span>{target_max}{unit}</span>
+        </div>
+        <div class="coaching-cue">{coaching_cue}</div>
     </div>
     """, unsafe_allow_html=True)
 
 
-def render_analysis_view() -> None:
-    """Render the main analysis view with video and metrics side by side."""
+# =============================================================================
+# FOCUS AREA CARD
+# =============================================================================
+def render_focus_card(icon: str, title: str, value: str, rating: str, cue: str):
+    """Render a focus area card."""
+    colors = {"good": "#22c55e", "okay": "#f59e0b", "poor": "#ef4444"}
+    color = colors.get(rating, "#a0a0a0")
     
-    if not st.session_state.processing_complete:
-        return
+    st.markdown(f"""
+    <div class="focus-card">
+        <div class="focus-icon">{icon}</div>
+        <div class="focus-title">{title}</div>
+        <div class="focus-value" style="color: {color};">{value}</div>
+        <div class="focus-cue">{cue}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+# =============================================================================
+# HERO SCORE
+# =============================================================================
+def render_hero_score(score: float, rating: str, summary: str):
+    """Render the hero score card."""
+    st.markdown(f"""
+    <div class="hero-score">
+        <div class="hero-score-label">Form Score</div>
+        <div class="hero-score-value">{score:.1f}<span style="font-size: 2rem;">/10</span></div>
+        <span class="badge badge-{rating}" style="margin-top: 1rem; font-size: 0.8rem;">
+            {rating.upper()}
+        </span>
+        <div class="hero-summary">{summary.capitalize()}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+# =============================================================================
+# MAIN ANALYSIS VIEW
+# =============================================================================
+def render_analysis_view(settings: dict):
+    """Render the main analysis dashboard."""
     
-    processed_frames = st.session_state.processed_frames
-    frame_metrics = st.session_state.frame_metrics
+    frames = st.session_state.processed_frames
+    metrics_list = st.session_state.frame_metrics
     
-    if not processed_frames or not frame_metrics:
+    if not frames or not metrics_list:
         st.warning("No analysis data available.")
         return
     
-    # Get aggregated metrics
-    if st.session_state.aggregated_metrics is None:
-        st.session_state.aggregated_metrics = aggregate_metrics(frame_metrics)
-    aggregated = st.session_state.aggregated_metrics
+    # Get current frame data
+    idx = min(st.session_state.current_frame_idx, len(metrics_list) - 1)
+    current_metrics = metrics_list[idx]
+    aggregated = st.session_state.aggregated_metrics or aggregate_metrics(metrics_list)
     
-    # Get current frame metrics
-    current_idx = min(st.session_state.current_frame_idx, len(frame_metrics) - 1)
-    current_metrics = frame_metrics[current_idx] if current_idx < len(frame_metrics) else None
+    # Calculate scores
+    score, rating, summary = calculate_form_score(current_metrics)
     
-    # Calculate overall score
-    total_score, total_rating = calculate_form_score(current_metrics, aggregated)
+    # ===== TABS =====
+    tab_overview, tab_video, tab_metrics, tab_info = st.tabs([
+        "📊 Overview", "🎬 Video & Overlay", "📐 All Metrics", "ℹ️ How It Works"
+    ])
     
-    # Layout: Video on left, metrics on right
-    col_video, col_metrics = st.columns([3, 2])
-    
-    with col_video:
-        # Frame navigation
-        nav_col1, nav_col2, nav_col3 = st.columns([1, 4, 1])
+    # ===== OVERVIEW TAB =====
+    with tab_overview:
+        col_left, col_right = st.columns([2, 1])
         
-        with nav_col1:
+        with col_left:
+            # Hero Score
+            render_hero_score(score, rating, summary)
+            
+            st.markdown("<br>", unsafe_allow_html=True)
+            
+            # Top 3 Focus Areas
+            st.markdown("### 🎯 Focus Areas")
+            
+            focus_cols = st.columns(3)
+            
+            # Focus 1: Trunk Lean
+            trunk = current_metrics.angles.get("trunk_lean")
+            trunk_rating, _ = get_rating(abs(trunk) if trunk else 0, 40, 10, 20)
+            with focus_cols[0]:
+                render_focus_card(
+                    "🏃", "Trunk Lean",
+                    f"{abs(trunk):.0f}°" if trunk and not pd.isna(trunk) else "—",
+                    trunk_rating,
+                    get_coaching_cue("trunk_lean", trunk, current_metrics.phase)
+                )
+            
+            # Focus 2: Knee Drive
+            left_knee = current_metrics.angles.get("left_knee")
+            right_knee = current_metrics.angles.get("right_knee")
+            front_knee = min(left_knee or 180, right_knee or 180) if (left_knee or right_knee) else None
+            knee_rating, _ = get_rating(front_knee, 110, 15, 25) if front_knee else ("poor", "—")
+            with focus_cols[1]:
+                render_focus_card(
+                    "🦵", "Knee Drive",
+                    f"{front_knee:.0f}°" if front_knee and not pd.isna(front_knee) else "—",
+                    knee_rating,
+                    "Drive knee high for power" if front_knee and front_knee < 100 else "Good knee lift!"
+                )
+            
+            # Focus 3: Phase
+            phase = current_metrics.phase
+            phase_rating = "good" if phase != SprintPhase.UNKNOWN else "okay"
+            with focus_cols[2]:
+                render_focus_card(
+                    "⏱️", "Current Phase",
+                    phase.display_name,
+                    phase_rating,
+                    get_phase_description(phase)[:60] + "..."
+                )
+        
+        with col_right:
+            # Compact video preview
+            st.markdown("### 🎬 Preview")
+            current_frame = frames[st.session_state.current_frame_idx]
+            st.image(current_frame, use_container_width=True)
+            
+            # Frame slider
+            new_idx = st.slider(
+                "Frame", 0, len(frames) - 1, 
+                st.session_state.current_frame_idx,
+                label_visibility="collapsed"
+            )
+            if new_idx != st.session_state.current_frame_idx:
+                st.session_state.current_frame_idx = new_idx
+                st.rerun()
+    
+    # ===== VIDEO TAB =====
+    with tab_video:
+        # Navigation
+        nav_cols = st.columns([1, 6, 1])
+        with nav_cols[0]:
             if st.button("◀ Prev", use_container_width=True):
                 if st.session_state.current_frame_idx > 0:
                     st.session_state.current_frame_idx -= 1
                     st.rerun()
-        
-        with nav_col2:
+        with nav_cols[1]:
             frame_idx = st.slider(
-                "Frame",
-                0, len(processed_frames) - 1,
+                "Frame", 0, len(frames) - 1,
                 st.session_state.current_frame_idx,
-                label_visibility="collapsed"
+                label_visibility="collapsed",
+                key="video_slider"
             )
             if frame_idx != st.session_state.current_frame_idx:
                 st.session_state.current_frame_idx = frame_idx
                 st.rerun()
-        
-        with nav_col3:
+        with nav_cols[2]:
             if st.button("Next ▶", use_container_width=True):
-                if st.session_state.current_frame_idx < len(processed_frames) - 1:
+                if st.session_state.current_frame_idx < len(frames) - 1:
                     st.session_state.current_frame_idx += 1
                     st.rerun()
         
-        # Display current frame
-        current_frame = processed_frames[st.session_state.current_frame_idx]
-        st.image(current_frame, use_container_width=True)
+        # Video display
+        video_col_ratio = settings["video_width"] / 100
+        vid_col, info_col = st.columns([video_col_ratio * 2, (1 - video_col_ratio) * 2])
         
-        # Timeline info
-        if current_metrics:
+        with vid_col:
+            st.image(frames[st.session_state.current_frame_idx], use_container_width=True)
             st.markdown(f"""
-            <div class="timeline-container">
-                <div style="display: flex; justify-content: space-between; color: #8b8b9a;">
-                    <span>Frame {current_metrics.frame_index}</span>
-                    <span>{current_metrics.timestamp_sec:.2f}s</span>
-                    <span>{st.session_state.current_frame_idx + 1} / {len(processed_frames)}</span>
-                </div>
+            <div style="text-align: center; color: #a0a0a0; font-size: 0.85rem;">
+                Frame {current_metrics.frame_index} | {current_metrics.timestamp_sec:.2f}s | 
+                {st.session_state.current_frame_idx + 1}/{len(frames)}
             </div>
             """, unsafe_allow_html=True)
-    
-    with col_metrics:
-        # Tabs for different views
-        tab_analysis, tab_metrics, tab_details = st.tabs(["📊 Analysis", "📐 Metrics", "📋 Details"])
         
-        with tab_analysis:
-            # Total score card
+        with info_col:
+            # Phase badge
+            phase = current_metrics.phase
+            phase_colors = {
+                SprintPhase.SET: "#ef4444",
+                SprintPhase.DRIVE: "#f59e0b", 
+                SprintPhase.ACCELERATION: "#eab308",
+                SprintPhase.MAX_VELOCITY: "#22c55e",
+                SprintPhase.UNKNOWN: "#a0a0a0",
+            }
             st.markdown(f"""
-            <div class="total-score-card">
-                <div class="total-score-label">🏆 Total Score</div>
-                <div class="total-score-value">{total_score}%</div>
-                <span class="badge badge-{total_rating}" style="margin-top: 0.5rem;">{total_rating.title()}</span>
+            <div class="phase-badge" style="background: {phase_colors[phase]}20; 
+                 border: 2px solid {phase_colors[phase]}; color: {phase_colors[phase]};">
+                {phase.display_name}
             </div>
             """, unsafe_allow_html=True)
             
             st.markdown("<br>", unsafe_allow_html=True)
             
-            # Phase indicator
-            if current_metrics:
-                phase = current_metrics.phase
-                phase_colors = {
-                    SprintPhase.SET: "#ff6464",
-                    SprintPhase.DRIVE: "#ffa500",
-                    SprintPhase.ACCELERATION: "#eab308",
-                    SprintPhase.MAX_VELOCITY: "#22c55e",
-                    SprintPhase.UNKNOWN: "#8b8b9a",
-                }
-                phase_color = phase_colors.get(phase, "#8b8b9a")
-                
-                st.markdown(f"""
-                <div class="phase-indicator">
-                    <div class="phase-name" style="color: {phase_color};">
-                        {phase.display_name}
-                    </div>
-                    <div class="phase-description">
-                        {get_phase_description(phase)[:100]}...
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            st.markdown("<br>", unsafe_allow_html=True)
-            
-            # Key metrics as score cards
-            if current_metrics:
-                angles = current_metrics.angles
-                
-                # Trunk lean
-                trunk_lean = angles.get("trunk_lean")
-                trunk_score, trunk_rating = get_metric_score(trunk_lean, 15, 50, 35)
-                render_score_card(
-                    "Trunk Lean",
-                    abs(trunk_lean) if trunk_lean else None,
-                    "°",
-                    trunk_score,
-                    trunk_rating,
-                    "Forward lean angle from vertical"
-                )
-                
-                # Front knee (min of left/right)
-                left_knee = angles.get("left_knee")
-                right_knee = angles.get("right_knee")
-                front_knee = min(left_knee or 180, right_knee or 180) if (left_knee or right_knee) else None
-                knee_score, knee_rating = get_metric_score(front_knee, 90, 140, 110)
-                render_score_card(
-                    "Knee Drive",
-                    front_knee,
-                    "°",
-                    knee_score,
-                    knee_rating,
-                    "Front knee angle for power output"
-                )
+            # Quick metrics
+            st.markdown("**Quick Stats**")
+            angles = current_metrics.angles
+            for name, key in [("Trunk Lean", "trunk_lean"), ("Left Knee", "left_knee"), 
+                              ("Right Knee", "right_knee")]:
+                val = angles.get(key)
+                if val and not pd.isna(val):
+                    st.markdown(f"- {name}: **{abs(val):.0f}°**")
+    
+    # ===== METRICS TAB =====
+    with tab_metrics:
+        st.markdown("### 📐 Detailed Metrics")
         
-        with tab_metrics:
-            # All angles in a clean layout
-            if current_metrics:
-                angles = current_metrics.angles
-                
-                st.markdown("### Joint Angles")
-                
-                metric_data = [
-                    ("Left Knee", angles.get("left_knee"), "°"),
-                    ("Right Knee", angles.get("right_knee"), "°"),
-                    ("Left Hip", angles.get("left_hip"), "°"),
-                    ("Right Hip", angles.get("right_hip"), "°"),
-                    ("Left Elbow", angles.get("left_elbow"), "°"),
-                    ("Right Elbow", angles.get("right_elbow"), "°"),
-                    ("Trunk Lean", abs(angles.get("trunk_lean", 0)) if angles.get("trunk_lean") else None, "°"),
-                ]
-                
-                for i in range(0, len(metric_data), 2):
-                    cols = st.columns(2)
-                    for j, col in enumerate(cols):
-                        if i + j < len(metric_data):
-                            label, value, unit = metric_data[i + j]
-                            with col:
-                                if value is not None and not pd.isna(value):
-                                    st.metric(label, f"{value:.1f}{unit}")
-                                else:
-                                    st.metric(label, "—")
-                
-                st.markdown("---")
-                st.markdown("### Averages")
-                
-                avg_angles = aggregated.get("avg_angles", {})
-                for key, value in avg_angles.items():
-                    display_name = key.replace("_", " ").title()
-                    st.markdown(f"**{display_name}:** {value:.1f}°")
+        col1, col2 = st.columns(2)
         
-        with tab_details:
-            # Phase sequence
-            st.markdown("### Phase Sequence")
-            phase_seq = aggregated.get("phase_sequence", [])
-            if phase_seq:
-                for p in phase_seq:
-                    phase = SprintPhase(p['phase'])
-                    st.markdown(f"- **{phase.display_name}** at {p['timestamp']:.2f}s")
+        angles = current_metrics.angles
+        
+        with col1:
+            render_metric_card(
+                "Trunk Lean", angles.get("trunk_lean"), "°",
+                optimal=40, target_min=30, target_max=55,
+                coaching_cue=get_coaching_cue("trunk_lean", angles.get("trunk_lean"), current_metrics.phase),
+                icon="🔄"
+            )
             
-            st.markdown("---")
+            render_metric_card(
+                "Left Knee", angles.get("left_knee"), "°",
+                optimal=110, target_min=90, target_max=140,
+                coaching_cue="Knee flexion for power output",
+                icon="🦵"
+            )
             
-            # Feedback
-            st.markdown("### 💡 Recommendations")
-            feedback_list = aggregated.get("overall_feedback", [])
-            if feedback_list:
-                for fb in feedback_list:
-                    st.markdown(f"""
-                    <div class="feedback-item">
-                        {fb}
-                    </div>
-                    """, unsafe_allow_html=True)
-            else:
-                st.markdown("""
-                <div class="feedback-item good">
-                    ✅ Form looks good! No major issues detected.
-                </div>
-                """, unsafe_allow_html=True)
+            render_metric_card(
+                "Left Hip", angles.get("left_hip"), "°",
+                optimal=160, target_min=140, target_max=180,
+                coaching_cue="Hip extension for stride length",
+                icon="🏃"
+            )
+        
+        with col2:
+            render_metric_card(
+                "Left Elbow", angles.get("left_elbow"), "°",
+                optimal=90, target_min=80, target_max=100,
+                coaching_cue="Keep elbows at ~90° for efficient arm drive",
+                icon="💪"
+            )
+            
+            render_metric_card(
+                "Right Knee", angles.get("right_knee"), "°",
+                optimal=110, target_min=90, target_max=140,
+                coaching_cue="Match left knee drive for symmetry",
+                icon="🦵"
+            )
+            
+            render_metric_card(
+                "Right Hip", angles.get("right_hip"), "°",
+                optimal=160, target_min=140, target_max=180,
+                coaching_cue="Full hip extension on each stride",
+                icon="🏃"
+            )
+        
+        # Averages section
+        with st.expander("📊 Session Averages"):
+            avg = aggregated.get("avg_angles", {})
+            avg_cols = st.columns(4)
+            for i, (key, val) in enumerate(avg.items()):
+                with avg_cols[i % 4]:
+                    st.metric(key.replace("_", " ").title(), f"{val:.1f}°")
+    
+    # ===== HOW IT WORKS TAB =====
+    with tab_info:
+        st.markdown("### ℹ️ How We Calculate Your Score")
+        
+        st.markdown("""
+        <div class="info-box">
+        <strong>🔬 Powered by AI Pose Estimation</strong><br><br>
+        We use <strong>MediaPipe BlazePose</strong> to detect 33 body landmarks in each frame. 
+        From these landmarks, we calculate joint angles (knee, hip, elbow) and body position 
+        (trunk lean, hip height) to assess your sprint form.
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("#### 📐 Angle Calculations")
+            st.markdown("""
+            - **Trunk Lean**: Angle of torso from vertical (hip-to-shoulder line)
+            - **Knee Angle**: Flexion at knee joint (hip-knee-ankle)
+            - **Hip Angle**: Extension at hip (shoulder-hip-knee)
+            - **Elbow Angle**: Arm bend (shoulder-elbow-wrist)
+            """)
+        
+        with col2:
+            st.markdown("#### ⏱️ Phase Detection")
+            st.markdown("""
+            We classify each frame into sprint phases based on:
+            - **Set**: Low hips, strong forward lean (40-55°)
+            - **Drive**: Rising hips, maintaining lean (30-50°)
+            - **Acceleration**: Transitioning upright (15-35°)
+            - **Max Velocity**: Upright running (<15°)
+            """)
+        
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        st.markdown("""
+        <div class="warning-box">
+        <strong>⚠️ Important Limitations</strong><br><br>
+        • Target ranges are based on coaching literature, not personalized to you<br>
+        • 2D video analysis cannot capture depth or rotation accurately<br>
+        • Camera angle significantly affects measurements (side view is best)<br>
+        • This is training feedback, not a medical or diagnostic tool<br>
+        • Always consult a qualified coach for personalized guidance
+        </div>
+        """, unsafe_allow_html=True)
 
 
-def process_video(
-    video_path: str,
-    settings: dict[str, Any],
-    progress_bar: Any,
-    status_text: Any,
-) -> tuple[list[np.ndarray], list[FrameMetrics]]:
-    """Process video and return annotated frames and metrics."""
+# =============================================================================
+# EMPTY STATE / UPLOAD VIEW
+# =============================================================================
+def render_upload_view(settings: dict):
+    """Render the upload interface."""
     
-    target_config = load_target_ranges()
-    props = get_video_properties(video_path)
-    st.session_state.video_properties = props
+    st.markdown("## 🏃 Sprint Form Analyzer")
+    st.markdown("Upload a video of your sprint to get AI-powered form analysis.")
     
-    status_text.text(f"Video: {props['width']}x{props['height']}, "
-                     f"{props['fps']:.1f} FPS, {props['duration_sec']:.1f}s")
+    # What you'll get
+    with st.container():
+        st.markdown("""
+        <div class="info-box">
+        <strong>📊 What You'll Get:</strong><br>
+        • Overall form score (0-10)<br>
+        • Top 3 actionable coaching cues<br>
+        • Detailed joint angle measurements<br>
+        • Phase-by-phase breakdown
+        </div>
+        """, unsafe_allow_html=True)
     
-    processed_frames = []
-    frame_metrics_list = []
+    st.markdown("<br>", unsafe_allow_html=True)
     
-    with PoseEstimator(
-        static_image_mode=False,
-        model_complexity=settings["model_complexity"],
-        min_detection_confidence=settings["min_confidence"],
-        min_tracking_confidence=settings["min_confidence"],
-    ) as estimator:
+    # Video quality checklist
+    with st.expander("✅ Video Quality Checklist", expanded=True):
+        st.markdown("""
+        For best results, ensure your video has:
+        - ☑️ **Side view** (perpendicular to running direction)
+        - ☑️ **Full body visible** in all frames
+        - ☑️ **Stable camera** (tripod recommended)
+        - ☑️ **Good lighting** (outdoor daylight is ideal)
+        - ☑️ **5-10 seconds** of footage
+        """)
+    
+    # Upload
+    st.markdown("### 📹 Upload Your Video")
+    uploaded = st.file_uploader(
+        "Choose a video file",
+        type=["mp4", "mov", "avi"],
+        label_visibility="collapsed"
+    )
+    
+    if uploaded:
+        st.video(uploaded)
         
-        total_frames = min(
-            props["frame_count"] // settings["sample_rate"],
-            settings["max_frames"]
-        )
-        
-        frame_generator = sample_frames(
-            video_path,
-            sample_rate=settings["sample_rate"],
-            max_frames=settings["max_frames"],
-        )
-        
-        for i, (frame_idx, frame_rgb) in enumerate(frame_generator):
-            progress = min((i + 1) / max(total_frames, 1), 1.0)
-            progress_bar.progress(progress)
-            status_text.text(f"Analyzing frame {frame_idx}... ({i + 1}/{total_frames})")
-            
-            pose_result = estimator.process_frame(frame_rgb)
-            
-            if pose_result is not None:
-                metrics = compute_frame_metrics(
-                    frame_index=frame_idx,
-                    fps=props["fps"],
-                    landmarks=pose_result.landmarks,
-                    target_config=target_config,
-                    visibility_threshold=settings["min_confidence"],
-                )
-                
-                annotated = annotate_frame(
-                    frame=frame_rgb,
-                    landmarks=pose_result.landmarks,
-                    angles=metrics.angles,
-                    phase=metrics.phase,
-                    frame_index=frame_idx,
-                    timestamp=metrics.timestamp_sec,
-                    draw_angles=settings["show_angles"],
-                    draw_info=settings["show_frame_info"],
-                    visibility_threshold=settings["min_confidence"],
-                )
-                
-                processed_frames.append(annotated)
-                frame_metrics_list.append(metrics)
-            else:
-                processed_frames.append(frame_rgb)
-    
-    return processed_frames, frame_metrics_list
+        if st.button("🚀 Analyze My Sprint", type="primary", use_container_width=True):
+            process_video(uploaded, settings)
 
 
-def main() -> None:
-    """Main application entry point."""
+# =============================================================================
+# VIDEO PROCESSING
+# =============================================================================
+def process_video(uploaded_file, settings: dict):
+    """Process uploaded video."""
     
-    init_session_state()
+    progress = st.progress(0)
+    status = st.empty()
     
-    # Header
-    st.markdown("""
-    <div class="app-header">
-        <h1 class="app-title">🏃 Sprint Form Analyzer</h1>
-        <p class="app-subtitle">AI-powered analysis for 60m-200m events</p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Check if we have analysis results to show
-    if st.session_state.processing_complete:
-        # Show analysis view
-        render_analysis_view()
+    try:
+        status.text("Loading video...")
+        video_path = load_video_from_uploaded_file(uploaded_file)
+        props = get_video_properties(video_path)
+        st.session_state.video_properties = props
         
-        # Button to upload new video
-        st.markdown("---")
-        if st.button("📹 Analyze New Video", type="secondary"):
-            st.session_state.processing_complete = False
-            st.session_state.processed_frames = []
-            st.session_state.frame_metrics = []
-            st.session_state.aggregated_metrics = None
-            st.rerun()
-    else:
-        # Show upload UI
-        st.markdown("### 📹 Upload Your Sprint Video")
-        st.markdown("Supported formats: MP4, MOV, AVI")
+        target_config = load_target_ranges()
+        frames = []
+        metrics_list = []
         
-        # Settings in expander
-        with st.expander("⚙️ Analysis Settings", expanded=False):
-            col1, col2 = st.columns(2)
-            with col1:
-                sample_rate = st.slider("Sample every Nth frame", 1, 10, 3)
-                max_frames = st.number_input("Max frames to process", 10, 500, 100)
-            with col2:
-                model_complexity = st.selectbox("Model quality", [0, 1, 2], index=1,
-                    format_func=lambda x: ["Lite (fast)", "Full", "Heavy (accurate)"][x])
-                min_confidence = st.slider("Detection confidence", 0.3, 0.9, 0.5)
+        total = min(props["frame_count"] // settings["sample_rate"], settings["max_frames"])
         
-        settings = {
-            "sample_rate": sample_rate,
-            "max_frames": max_frames,
-            "model_complexity": model_complexity,
-            "min_confidence": min_confidence,
-            "show_angles": True,
-            "show_frame_info": True,
-        }
-        
-        uploaded_video = st.file_uploader(
-            "Choose a video file",
-            type=["mp4", "mov", "avi"],
-            label_visibility="collapsed"
-        )
-        
-        if uploaded_video is not None:
-            st.video(uploaded_video)
+        with PoseEstimator(
+            static_image_mode=False,
+            model_complexity=settings.get("model_complexity", 1),
+            min_detection_confidence=settings.get("confidence", 0.5),
+            min_tracking_confidence=settings.get("confidence", 0.5),
+        ) as estimator:
             
-            if st.button("🚀 Analyze Video", type="primary", use_container_width=True):
-                st.session_state.processed_frames = []
-                st.session_state.frame_metrics = []
-                st.session_state.current_frame_idx = 0
-                st.session_state.aggregated_metrics = None
+            for i, (frame_idx, frame_rgb) in enumerate(sample_frames(
+                video_path, settings["sample_rate"], settings["max_frames"]
+            )):
+                prog = min((i + 1) / max(total, 1), 1.0)
+                progress.progress(prog)
+                status.text(f"Analyzing frame {frame_idx}... ({i + 1}/{total})")
                 
-                progress_bar = st.progress(0)
-                status_text = st.empty()
+                result = estimator.process_frame(frame_rgb)
                 
-                try:
-                    status_text.text("Loading video...")
-                    video_path = load_video_from_uploaded_file(uploaded_video)
-                    
-                    processed_frames, frame_metrics = process_video(
-                        video_path, settings, progress_bar, status_text
+                if result:
+                    metrics = compute_frame_metrics(
+                        frame_idx, props["fps"], result.landmarks,
+                        target_config, settings.get("confidence", 0.5)
                     )
                     
-                    st.session_state.processed_frames = processed_frames
-                    st.session_state.frame_metrics = frame_metrics
-                    st.session_state.processing_complete = True
+                    annotated = annotate_frame(
+                        frame_rgb, result.landmarks, metrics.angles, metrics.phase,
+                        frame_idx, metrics.timestamp_sec,
+                        draw_angles=settings.get("show_angles", False),
+                        draw_info=True,
+                        visibility_threshold=settings.get("confidence", 0.5)
+                    )
                     
-                    cleanup_temp_file(video_path)
-                    
-                    progress_bar.progress(1.0)
-                    status_text.text("✅ Analysis complete!")
-                    
-                    # Rerun to show analysis view
-                    st.rerun()
-                    
-                except Exception as e:
-                    st.error(f"Error: {str(e)}")
-                    status_text.text("❌ Processing failed")
+                    frames.append(annotated)
+                    metrics_list.append(metrics)
+                else:
+                    frames.append(frame_rgb)
+        
+        cleanup_temp_file(video_path)
+        
+        st.session_state.processed_frames = frames
+        st.session_state.frame_metrics = metrics_list
+        st.session_state.aggregated_metrics = aggregate_metrics(metrics_list)
+        st.session_state.processing_complete = True
+        st.session_state.current_frame_idx = 0
+        
+        progress.progress(1.0)
+        status.text("✅ Analysis complete!")
+        st.rerun()
+        
+    except Exception as e:
+        st.error(f"Error: {str(e)}")
+        status.text("❌ Processing failed")
+
+
+# =============================================================================
+# MAIN
+# =============================================================================
+def main():
+    init_session_state()
+    settings = render_sidebar()
+    
+    if st.session_state.processing_complete:
+        render_analysis_view(settings)
+        
+        st.markdown("---")
+        col1, col2, col3 = st.columns([1, 1, 1])
+        with col2:
+            if st.button("📹 Analyze New Video", use_container_width=True):
+                st.session_state.processing_complete = False
+                st.session_state.processed_frames = []
+                st.session_state.frame_metrics = []
+                st.session_state.aggregated_metrics = None
+                st.rerun()
+    else:
+        render_upload_view(settings)
 
 
 if __name__ == "__main__":
